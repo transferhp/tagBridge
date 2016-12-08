@@ -1,0 +1,7 @@
+######python####
+*.pyc
+
+######data file######
+data/
+
+.idea/
