@@ -6,15 +6,17 @@
 #
 
 import numpy as np
-from base import Recommender
-from util.util import sigmoid, sigmoid_grad, normalize, bound_prediction
+import scipy.sparse as ssp
+from base import CRecommender
+from util.util import single_sigmoid, sigmoid, sigmoid_grad, normalize
 from math import sqrt
+from joblib import Parallel, delayed
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics.pairwise import cosine_similarity
 np.random.seed(999)
 
 
-class TagCDCF(Recommender):
+class TagCDCF(CRecommender):
     """
     This class is used to implement the algorithm proposed in the
     following paper:
@@ -42,88 +44,82 @@ class TagCDCF(Recommender):
         # display training process
         self.verbose = verbose
 
-    def _find_col_id(self, mdict, mkeys):
-        """Find column index by column name."""
-        return [mdict[key] for key in mkeys]
 
-    def _fit(self):
-        # collect common tags
-        com_tags = set(self.src_tagid.keys()) & set(self.tar_tagid.keys())
-
-        # slicing tagging matrix by common tags
-        tar_cols = self._find_col_id(self.tar_tagid, com_tags)
-        src_cols = self._find_col_id(self.src_tagid, com_tags)
-        src_user_comTag_mat = self.src_user_tag_mat.tocsc()[:, src_cols]
-        tar_user_comTag_mat = self.tar_user_tag_mat.tocsc()[:, tar_cols]
-        src_item_comTag_mat = self.src_item_tag_mat.tocsc()[:, src_cols]
-        tar_item_comTag_mat = self.tar_item_tag_mat.tocsc()[:, tar_cols]
-
+    def _fit(self, args):
+        src_user_tag_mat, tar_user_tag_mat, \
+        src_item_tag_mat, tar_item_tag_mat = args
         # compute cross-domain similarities
-        self.cross_user_sim = cosine_similarity(src_user_comTag_mat.sign(),
-                                                tar_user_comTag_mat.sign(),
+        self.cross_user_sim = cosine_similarity(src_user_tag_mat,
+                                                tar_user_tag_mat,
                                                 dense_output=False)
-        self.cross_item_sim = cosine_similarity(src_item_comTag_mat.sign(),
-                                                tar_item_comTag_mat.sign(),
+        self.cross_item_sim = cosine_similarity(src_item_tag_mat,
+                                                tar_item_tag_mat,
                                                 dense_output=False)
         # set indicator matrix for cross domain similarity matrices
         self.user_sim_indicator = self.cross_user_sim.sign()
         self.item_sim_indicator = self.cross_item_sim.sign()
 
         # initialize latent user and item feature matrices
-        self.src_user = np.random.rand(self.src_tr_rate_mat.shape[0], self.num_factor)
-        self.src_item = np.random.rand(self.src_tr_rate_mat.shape[1], self.num_factor)
-        self.tar_user = np.random.rand(self.tar_tr_rate_mat.shape[0], self.num_factor)
-        self.tar_item = np.random.rand(self.tar_tr_rate_mat.shape[1], self.num_factor)
+        self.src_user = np.random.normal(scale=0.5, size=(self.src_tr_rate_mat.shape[0],
+                                                          self.num_factor))
+        self.src_item = np.random.normal(scale=0.5, size=(self.src_tr_rate_mat.shape[1],
+                                                          self.num_factor))
+        self.tar_user = np.random.normal(scale=0.5, size=(self.tar_tr_rate_mat.shape[0],
+                                                          self.num_factor))
+        self.tar_item = np.random.normal(scale=0.5, size=(self.tar_tr_rate_mat.shape[1],
+                                                          self.num_factor))
         # set indicator matrix
         self.src_rate_indicator = self.src_tr_rate_mat.sign()
         self.tar_rate_indicator = self.tar_tr_rate_mat.sign()
 
         # normalize rating matrix values to [0,1]
-        self.max_val, self.min_val, self.tar_tr_rate_mat = normalize(self.tar_tr_rate_mat)
+        normalize(self.tar_tr_rate_mat)
 
         # train the model
         self._train()
 
     def _train(self):
         err_last = float('Nan')
-        step = 0.01
+        step = 0.005
         t = 0
+        old_src_u = np.copy(self.src_user)
+        old_src_i = np.copy(self.src_item)
+        old_tar_u = np.copy(self.tar_user)
+        old_tar_i = np.copy(self.tar_item)
         while t < self.maxIter:
-            step *= 1.05
+            step *= 2.0
             temp = self._gradient_src_user()
-            nextU1 = self.src_user - step * (
-                temp + self.reg_lambda * self.src_user)
+            self.src_user -= step * (temp + self.reg_lambda * self.src_user)
             temp = self._gradient_src_item()
-            nextV1 = self.src_item - step * (
-                temp + self.reg_lambda * self.src_item)
+            self.src_item -= step * (temp + self.reg_lambda * self.src_item)
             temp = self._gradient_tar_user()
-            nextU2 = self.tar_user - step * (
-                temp + self.reg_lambda * self.tar_user)
+            self.tar_user -= step * (temp + self.reg_lambda * self.tar_user)
             temp = self._gradient_tar_item()
-            nextV2 = self.tar_item - step * (
-                temp + self.reg_lambda * self.tar_item)
-            err = self._loss(nextU1, nextV1, nextU2, nextV2)
+            self.tar_item -= step * (temp + self.reg_lambda * self.tar_item)
+            err = self._loss()
             print err
             while err > err_last:
-                step *= 0.95
+                step *= 0.5
+                #copy
+                self.src_user = np.copy(old_src_u)
+                self.src_item = np.copy(old_src_i)
+                self.tar_user = np.copy(old_tar_u)
+                self.tar_item = np.copy(old_tar_i)
                 temp = self._gradient_src_user()
-                nextU1 = self.src_user - step * (
-                    temp + self.reg_lambda * self.src_user)
+                self.src_user -= step * (temp + self.reg_lambda * self.src_user)
                 temp = self._gradient_src_item()
-                nextV1 = self.src_item - step * (
-                    temp + self.reg_lambda * self.src_item)
+                self.src_item -= step * (temp + self.reg_lambda * self.src_item)
                 temp = self._gradient_tar_user()
-                nextU2 = self.tar_user - step * (
-                    temp + self.reg_lambda * self.tar_user)
+                self.tar_user -= step * (temp + self.reg_lambda * self.tar_user)
                 temp = self._gradient_tar_item()
-                nextV2 = self.tar_item - step * (
-                    temp + self.reg_lambda * self.tar_item)
-                err = self._loss(nextU1, nextV1, nextU2, nextV2)
+                self.tar_item -= step * (temp + self.reg_lambda * self.tar_item)
+                err = self._loss()
                 print err
-            self.src_user = nextU1
-            self.src_item = nextV1
-            self.tar_user = nextU2
-            self.tar_item = nextV2
+            # keep temp results
+            old_src_u = np.copy(self.src_user)
+            old_src_i = np.copy(self.src_item)
+            old_tar_u = np.copy(self.tar_user)
+            old_tar_i = np.copy(self.tar_item)
             del_err = (err_last - err) / err_last
             if del_err < self.tol:
                 break
@@ -131,16 +127,16 @@ class TagCDCF(Recommender):
                 t += 1
                 err_last = err
                 # Make predictions with updated parameters
-                predictions = self.predict()
+                predictions = [self.predict(uidx, iidx) for uidx, iidx in
+                               zip(*self.tar_tr_rate_mat.nonzero())]
                 train_rmse = sqrt(mean_squared_error(
-                        self.tar_tr_rate_mat.data,
-                        predictions[self.tar_tr_rate_mat.nonzero()]))
+                        self.tar_tr_rate_mat.data, predictions))
                 if self.verbose:
                     print("[Epoch {0}/{1}] | Train rmse={2:.4f} ".format(t,
                                                                          self.maxIter,
                                                                          train_rmse))
 
-    def _predict(self):
+    def _predict(self, u, i):
         """
         Make predictions.
 
@@ -149,49 +145,34 @@ class TagCDCF(Recommender):
         predictions : numpy.ndarray
             The prediction on
         """
-        predictions = sigmoid(self.tar_user.dot(self.tar_item.T)) * self.max_val
-        predictions = bound_prediction(predictions, self.max_val, self.min_val)
-        return predictions
+        est = single_sigmoid(self.tar_user[u].dot(self.tar_item[i])) * self.rmax
+        return est
 
-    def _loss(self, u1, v1, u2, v2):
+    def _loss(self):
         """
         compute objective function.
-
-        Parameters
-        ----------
-        u1 : numpy.ndarray
-        User latent feature matrix for source domain.
-        v1 : numpy.ndarray
-        Item latent feature matrix for source domain.
-        u2 : numpy.ndarray
-        User latent feature matrix for target domain.
-        v2 : numpy.ndarray
-        Item latent feature matrix for target domain.
 
         Returns
         ----------
         err: float
         Computed loss function value.
         """
-        e1 = (
-            (self.src_rate_indicator.multiply(sigmoid(np.dot(u1, v1.T))) -
-             self.src_tr_rate_mat).power(2).sum() +
-            (self.tar_rate_indicator.multiply(sigmoid(np.dot(u2, v2.T))) -
-             self.tar_tr_rate_mat).power(2).sum()
-        )
+        UsVs = sigmoid(np.dot(self.src_user, self.src_item.T))
+        UtVt = sigmoid(np.dot(self.tar_user, self.tar_item.T))
+        src_acc_sum = UsVs[self.src_tr_rate_mat.nonzero()] - self.src_tr_rate_mat.data
+        tar_acc_sum = UtVt[self.tar_tr_rate_mat.nonzero()] - self.tar_tr_rate_mat.data
+        e1 = np.sum((src_acc_sum)**2) + np.sum((tar_acc_sum)**2)
 
-        e2 = (self.user_sim_indicator.multiply(
-                sigmoid(np.dot(u1, u2.T))) -
-              self.cross_user_sim).power(2).sum()
+        UsUt = sigmoid(np.dot(self.src_user, self.tar_user.T))
+        e2 = np.sum((UsUt[self.cross_user_sim.nonzero()] - self.cross_user_sim.data) ** 2)
 
-        e3 = (self.item_sim_indicator.multiply(
-                sigmoid(np.dot(v1, v2.T))) -
-              self.cross_item_sim).power(2).sum()
+        VsVt = sigmoid(np.dot(self.src_item, self.tar_item.T))
+        e3 = np.sum((VsVt[self.cross_item_sim.nonzero()] - self.cross_item_sim.data) ** 2)
 
-        e4 = (np.sum(u1 ** 2) +
-              np.sum(u2 ** 2) +
-              np.sum(v1 ** 2) +
-              np.sum(v2 ** 2)
+        e4 = (np.sum(self.src_user ** 2) +
+              np.sum(self.tar_user ** 2) +
+              np.sum(self.src_item ** 2) +
+              np.sum(self.tar_item ** 2)
               )
 
         err = (0.5 * e1 +
@@ -200,7 +181,7 @@ class TagCDCF(Recommender):
                0.5 * self.reg_lambda * e4)
         return err
 
-    def _gradient_src_user(self):
+    def _gradient_src_user(self, n_jobs=8, batch_size=500):
         """
         Update latent user feature factors of source domain.
 
@@ -209,19 +190,23 @@ class TagCDCF(Recommender):
         tmp: numpy.ndarray
             A updated source user latent feature matrix.
         """
-        tmp = (
-            (self.src_rate_indicator.multiply(sigmoid(np.dot(self.src_user, self.src_item.T))) -
-             self.src_tr_rate_mat).multiply(sigmoid_grad(
-                    np.dot(self.src_user, self.src_item.T))).dot(self.src_item) +
-            self.reg_cross_u * (self.user_sim_indicator.multiply(sigmoid(
-                    np.dot(self.src_user, self.tar_user.T))) - self.cross_user_sim).multiply(
-                    sigmoid_grad(np.dot(self.src_user, self.tar_user.T))).dot(
-                    self.tar_user)
-        )
+        m, f = self.src_user.shape  # m: n_users, f: n_factors
 
-        return tmp
+        start_idx = range(0, m, batch_size)
+        end_idx = start_idx[1:] + [m]
+        res = Parallel(n_jobs=n_jobs)(
+                delayed(_batch_grad_src_user)(lo, hi, f, self.src_user, self.src_item,
+                                              self.src_rate_indicator,
+                                              self.src_tr_rate_mat, self.tar_user,
+                                              self.user_sim_indicator,
+                                              self.cross_user_sim,
+                                              self.reg_cross_u
+                                              )
+                for lo, hi in zip(start_idx, end_idx))
+        grad_src_user = np.vstack(res)
+        return grad_src_user
 
-    def _gradient_src_item(self):
+    def _gradient_src_item(self, n_jobs=8, batch_size=500):
         """
         Update latent item feature factors of source domain.
 
@@ -230,19 +215,23 @@ class TagCDCF(Recommender):
         tmp: numpy.ndarray
             A updated source item latent feature matrix.
         """
-        tmp = (
-            (self.src_rate_indicator.multiply(sigmoid(np.dot(self.src_user, self.src_item.T))) -
-             self.src_tr_rate_mat).multiply(sigmoid_grad(np.dot(self.src_user,
-                                                     self.src_item.T))).T.dot(
-                    self.src_user) +
-            self.reg_cross_i * (self.item_sim_indicator.multiply(sigmoid(np.dot(self.src_item, self.tar_item.T))) -
-                                self.cross_item_sim).multiply(sigmoid_grad(
-                    np.dot(self.src_item, self.tar_item.T))).dot(self.tar_item)
-        )
+        m, f = self.src_item.shape  # m: n_items, f: n_factors
 
-        return tmp
+        start_idx = range(0, m, batch_size)
+        end_idx = start_idx[1:] + [m]
+        res = Parallel(n_jobs=n_jobs)(
+                delayed(_batch_grad_src_item)(lo, hi, f, self.src_user, self.src_item,
+                                              self.src_rate_indicator,
+                                              self.src_tr_rate_mat, self.tar_item,
+                                              self.item_sim_indicator,
+                                              self.cross_item_sim,
+                                              self.reg_cross_i
+                                              )
+                for lo, hi in zip(start_idx, end_idx))
+        grad_src_item = np.vstack(res)
+        return grad_src_item
 
-    def _gradient_tar_user(self):
+    def _gradient_tar_user(self, n_jobs=8, batch_size=500):
         """
         Update latent user feature factors of target domain.
 
@@ -251,18 +240,23 @@ class TagCDCF(Recommender):
         tmp: numpy.ndarray
             A updated target user latent feature matrix.
         """
-        tmp = (
-            (self.tar_rate_indicator.multiply(sigmoid(np.dot(self.tar_user, self.tar_item.T))) -
-             self.tar_tr_rate_mat).multiply(sigmoid_grad(
-                    np.dot(self.tar_user, self.tar_item.T))).dot(self.tar_item) +
-            self.reg_cross_u * (self.user_sim_indicator.multiply(sigmoid(np.dot(self.src_user, self.tar_user.T))) -
-                                self.cross_user_sim).multiply(sigmoid_grad(
-                    np.dot(self.src_user, self.tar_user.T))).T.dot(self.src_user)
-        )
+        m, f = self.tar_user.shape  # m: n_items, f: n_factors
 
-        return tmp
+        start_idx = range(0, m, batch_size)
+        end_idx = start_idx[1:] + [m]
+        res = Parallel(n_jobs=n_jobs)(
+                delayed(_batch_grad_tar_user)(lo, hi, f, self.tar_user, self.tar_item,
+                                              self.tar_rate_indicator,
+                                              self.tar_tr_rate_mat, self.src_user,
+                                              self.user_sim_indicator,
+                                              self.cross_user_sim,
+                                              self.reg_cross_u
+                                              )
+                for lo, hi in zip(start_idx, end_idx))
+        grad_tar_user = np.vstack(res)
+        return grad_tar_user
 
-    def _gradient_tar_item(self):
+    def _gradient_tar_item(self, n_jobs=8, batch_size=500):
         """
         Update latent item feature factors of target domain.
 
@@ -271,13 +265,89 @@ class TagCDCF(Recommender):
         tmp: numpy.ndarray
             A updated target item latent feature matrix.
         """
-        tmp = (
-            (self.tar_rate_indicator.multiply(sigmoid(np.dot(self.tar_user, self.tar_item.T))) -
-             self.tar_tr_rate_mat).multiply(sigmoid_grad(np.dot(self.tar_user,
-                                                     self.tar_item.T))).T.dot(
-                    self.tar_user) +
-            self.reg_cross_i * (self.item_sim_indicator.multiply(sigmoid(np.dot(self.src_item, self.tar_item.T))) -
-                                self.cross_item_sim).multiply(sigmoid_grad(
-                    np.dot(self.src_item, self.tar_item.T))).T.dot(self.src_item)
-        )
-        return tmp
+        m, f = self.tar_item.shape  # m: n_items, f: n_factors
+
+        start_idx = range(0, m, batch_size)
+        end_idx = start_idx[1:] + [m]
+        res = Parallel(n_jobs=n_jobs)(
+                delayed(_batch_grad_tar_item)(lo, hi, f, self.tar_user, self.tar_item,
+                                              self.tar_rate_indicator,
+                                              self.tar_tr_rate_mat, self.src_item,
+                                              self.item_sim_indicator,
+                                              self.cross_item_sim,
+                                              self.reg_cross_i
+                                              )
+                for lo, hi in zip(start_idx, end_idx))
+        grad_tar_item = np.vstack(res)
+        return grad_tar_item
+
+
+
+def _batch_grad_src_user(lo, hi, f, src_user, src_item, src_rate_indicator,
+                         src_tr_rate_mat, tar_user, user_sim_indicator, cross_user_sim,
+                         reg_cross_u):
+    tmp = np.empty((hi - lo, f), dtype=src_user.dtype)
+    UVT = np.dot(src_user[lo:hi], src_item.T)
+    part1 = (src_rate_indicator[lo:hi].multiply(
+            sigmoid(UVT)) - src_tr_rate_mat[lo:hi]).multiply(
+            sigmoid_grad(UVT)).dot(src_item)
+
+    UUT = np.dot(src_user[lo:hi], tar_user.T)
+    part2 = (user_sim_indicator[lo:hi].multiply(
+            sigmoid(UUT)) - cross_user_sim[lo:hi]).multiply(
+            sigmoid_grad(UUT)).dot(tar_user)
+    tmp[0:hi-lo] = part1 + reg_cross_u * part2
+    return tmp
+
+
+def _batch_grad_src_item(lo, hi, f, src_user, src_item, src_rate_indicator,
+                         src_tr_rate_mat, tar_item, item_sim_indicator, cross_item_sim,
+                         reg_cross_i):
+    tmp = np.empty((hi - lo, f), dtype=src_item.dtype)
+    UVT = np.dot(src_user, src_item[lo:hi].T)
+    part1 = ((src_rate_indicator.tocsc()[:,lo:hi].multiply(
+            sigmoid(UVT)) - src_tr_rate_mat.tocsc()[:, lo:hi]).multiply(
+            sigmoid_grad(UVT))).T.dot(src_user)
+
+    VVT = np.dot(src_item[lo:hi], tar_item.T)
+    part2 = (item_sim_indicator[lo:hi].multiply(
+            sigmoid(VVT)) - cross_item_sim[lo:hi]).multiply(sigmoid_grad(
+            VVT)).dot(tar_item)
+    tmp[0:hi-lo] = part1 + reg_cross_i * part2
+    return tmp
+
+
+def _batch_grad_tar_user(lo, hi, f, tar_user, tar_item, tar_rate_indicator,
+                         tar_tr_rate_mat, src_user, user_sim_indicator, cross_user_sim,
+                         reg_cross_u):
+    tmp = np.empty((hi - lo, f), dtype=tar_user.dtype)
+    UVT = np.dot(tar_user[lo:hi], tar_item.T)
+    part1 = (tar_rate_indicator[lo:hi].multiply(sigmoid(UVT)) -
+             tar_tr_rate_mat[lo:hi]).multiply(
+            sigmoid_grad(UVT)).dot(tar_item)
+
+    UUT = np.dot(src_user, tar_user[lo:hi].T)
+    part2 = ((user_sim_indicator.tocsc()[:, lo:hi].multiply(
+            sigmoid(UUT)) - cross_user_sim.tocsc()[:, lo:hi]).multiply(
+            sigmoid_grad(UUT))).T.dot(src_user)
+
+    tmp[0:hi-lo] = part1 + reg_cross_u * part2
+    return tmp
+
+
+def _batch_grad_tar_item(lo, hi, f, tar_user, tar_item, tar_rate_indicator,
+                         tar_tr_rate_mat, src_item, item_sim_indicator, cross_item_sim,
+                         reg_cross_i):
+    tmp = np.empty((hi - lo, f), dtype=tar_item.dtype)
+    UVT = np.dot(tar_user, tar_item[lo:hi].T)
+    part1 = ((tar_rate_indicator.tocsc()[:, lo:hi].multiply(
+            sigmoid(UVT)) - tar_tr_rate_mat.tocsc()[:, lo:hi]).multiply(
+            sigmoid_grad(UVT))).T.dot(tar_user)
+
+    VVT = np.dot(src_item, tar_item[lo:hi].T)
+    part2 = ((item_sim_indicator.tocsc()[:, lo:hi].multiply(
+            sigmoid(VVT)) - cross_item_sim.tocsc()[:, lo:hi]).multiply(
+            sigmoid_grad(VVT))).T.dot(src_item)
+
+    tmp[0:hi-lo] = part1 + reg_cross_i * part2
+    return tmp
