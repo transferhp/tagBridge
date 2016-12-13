@@ -22,7 +22,7 @@ class Preprocess():
         # write to file
         with open (file_path, 'w') as f:
             for s, id in sampleid.items():
-                f.write('{0} : {1}\n'.format(s, id))
+                f.write('{0}:{1}\n'.format(s, id))
 
     def process_ml10m(self):
         data_dir = '../data/movielens/ml-10m/'
@@ -230,6 +230,9 @@ class Preprocess():
         actions = actions.groupby(['user_id', 'item_id']).apply(
                 lambda x: x[x['rating'] == x['rating'].unique()[0]])
 
+        actions.to_csv(os.path.join(data_dir, 'lt_cleaned.csv'), header=None, index=None,
+                       sep='\t')
+
         # filter out users and items that have less than 5 unique tags
         actions = self.filter_user_item(actions, 5)
 
@@ -366,7 +369,7 @@ class Preprocess():
 if __name__ == '__main__':
     processor = Preprocess()
     # pre-processing raw ml-10m dataset
-    processor.process_ml10m()
+    # processor.process_ml10m()
     # pre-processing raw lt dataset
     processor.process_lt()
 
