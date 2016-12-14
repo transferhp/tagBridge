@@ -125,8 +125,10 @@ class CRecommender(object):
     def predict(self, u, i):
         est = self._predict(u, i)
         # clip estimation into range [self.rmin, self.rmax]
-        est = min(self.rmin, est)
-        est = max(self.rmax, est)
+        if est < self.rmin:
+            return self.rmin
+        if est > self.rmax:
+            return self.rmax
         return est
 
     def _predict(self, u, i):

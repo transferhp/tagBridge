@@ -74,10 +74,10 @@ def normalize(csr_mat):
         raise ValueError('Input matrix should be in sparse csr format.')
 
     nnz_data = csr_mat.data
-    max_val = np.max(nnz_data)
-    csr_mat.data /= max_val
+    # max_val = np.max(nnz_data)
+    # csr_mat.data /= max_val
     # minMax normalization
-    # csr_mat.data = (nnz_data - np.mean(nnz_data)) / np.std(nnz_data)
+    csr_mat.data = (nnz_data - np.mean(nnz_data)) / np.std(nnz_data)
 
 
 def bound_prediction(predictions, max_val, min_val):

@@ -80,7 +80,7 @@ class TagCDCF(CRecommender):
 
     def _train(self):
         err_last = float('Nan')
-        step = 0.005
+        step = 0.0001
         t = 0
         old_src_u = np.copy(self.src_user)
         old_src_i = np.copy(self.src_item)

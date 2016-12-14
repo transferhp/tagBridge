@@ -36,8 +36,8 @@ def run():
 
 
 def run_tagcdcf():
-    src_dir = './data/movielens/ml-10m/pro/'
-    tar_dir = './data/librarything/pro/'
+    tar_dir = './data/movielens/ml-10m/pro/'
+    src_dir = './data/librarything/pro/'
 
     # load source rating matrix
     src_userid = read_dict(os.path.join(src_dir, 'unique_user_id.txt'))
@@ -86,7 +86,7 @@ def run_tagcdcf():
             src_item_tag_binary, tar_item_tag_binary]
 
     # train the model
-    model = TagCDCF(reg_cross_u=0.01, reg_cross_i=0.01, reg_lambda=0.01, num_factor=10)
+    model = TagCDCF(reg_cross_u=0.001, reg_cross_i=0.001, reg_lambda=0.01, num_factor=10)
     model.fit(*inputs)
 
     # load target test rating matrix
@@ -96,6 +96,8 @@ def run_tagcdcf():
     predictions = model.test(test_rating_mat)
 
     rmse = model.evaluate(predictions, test_rating_mat)
+    tmp = pd.DataFrame({'pred': predictions, 'truth': test_rating_mat.data})
+    tmp.to_csv("prediction_truth_comparison.csv")
     return rmse
 
 

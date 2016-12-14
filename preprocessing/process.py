@@ -36,7 +36,8 @@ class Preprocess():
                               sep='::')
         del rate_df['ts']
 
-        # Load raw tagging data, note 'NA' in original tagging data
+        # Load raw tagging data,
+        # note 'NA' in original tagging data, not treating as Nan
         names = ['user_id', 'item_id', 'tag', 'ts']
         tag_df = pd.read_csv(os.path.join(data_dir, 'tags.dat'),
                            names=names,
@@ -48,7 +49,7 @@ class Preprocess():
         # filter out users and items that have less than 3 unique tags
         tag_df = self.filter_user_item(tag_df, 3)
 
-        # TODO: save filtered tag_df?
+        # TODO: save cleaned tag_df?
         # tag_df.to_csv(os.path.join(data_dir, 'pro/', 'filtered_tag_df.csv'),index=False)
 
         # mapping left users, items and tags to id
@@ -56,14 +57,14 @@ class Preprocess():
         userid = mapping2id(users)
         items = tag_df['item_id'].unique().tolist()
         itemid = mapping2id(items)
-        tags = np.unique(tag_df['tag']).tolist()
+        tags = tag_df['tag'].unique().tolist()
         tagid = mapping2id(tags)
 
         self.save_id(userid, os.path.join(data_dir, 'pro/', 'unique_user_id.txt'))
         self.save_id(itemid, os.path.join(data_dir, 'pro/', 'unique_item_id.txt'))
         self.save_id(tagid, os.path.join(data_dir, 'pro/', 'unique_tag_id.txt'))
 
-        # filter rate_df by keeping only qualified users and items
+        # keeping users and items that have tagging records
         rate_df = rate_df[rate_df['user_id'].isin(users)]
         rate_df = rate_df[rate_df['item_id'].isin(items)]
         # TODO: save filtered rate_df?
@@ -91,7 +92,7 @@ class Preprocess():
         end_idx = start_idx[1:] + [len(train_df)]
         train_rate_mat = ssp.csr_matrix((len(userid), len(itemid)), dtype='float32')
         tmp = Parallel(n_jobs=-1)(delayed(rating_mat_batch)(
-                train_df[lo:hi], userid, itemid) for lo, hi in zip(start_idx,end_idx))
+                train_df[lo:hi], userid, itemid) for lo, hi in zip(start_idx, end_idx))
         for X in tmp:
             train_rate_mat += X
         print('....done!')
@@ -230,8 +231,9 @@ class Preprocess():
         actions = actions.groupby(['user_id', 'item_id']).apply(
                 lambda x: x[x['rating'] == x['rating'].unique()[0]])
 
-        actions.to_csv(os.path.join(data_dir, 'lt_cleaned.csv'), header=None, index=None,
-                       sep='\t')
+        # TODO: save cleaned lt data
+        # actions.to_csv(os.path.join(data_dir, 'lt_cleaned.csv'), header=None, index=None,
+        #                sep='\t')
 
         # filter out users and items that have less than 5 unique tags
         actions = self.filter_user_item(actions, 5)
@@ -369,7 +371,7 @@ class Preprocess():
 if __name__ == '__main__':
     processor = Preprocess()
     # pre-processing raw ml-10m dataset
-    # processor.process_ml10m()
+    processor.process_ml10m()
     # pre-processing raw lt dataset
     processor.process_lt()
 
