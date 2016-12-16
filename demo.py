@@ -14,12 +14,14 @@ import os
 import pandas as pd
 from collections import OrderedDict
 from util.util import read_dict, load_rating_mat, load_tagging_mat, find_col_idx
-from model.tagcdcf import TagCDCF
+from model import TagCDCF
+from model import SVD
 
 
 def run():
     # set model candidates
     algorithms = OrderedDict()
+    algorithms['svd'] = run_svd
     algorithms['tagcdcf'] = run_tagcdcf
     # algorithms['tagicofi'] = run_tagicofi
 
@@ -86,7 +88,7 @@ def run_tagcdcf():
             src_item_tag_binary, tar_item_tag_binary]
 
     # train the model
-    model = TagCDCF(reg_cross_u=0.001, reg_cross_i=0.001, reg_lambda=0.01, num_factor=10)
+    model = TagCDCF(reg_cross_u=0.001, reg_cross_i=0.001, reg_lambda=10, num_factor=10)
     model.fit(*inputs)
 
     # load target test rating matrix
@@ -104,6 +106,26 @@ def run_tagcdcf():
 def run_tagicofi():
     pass
 
+def run_svd():
+    data_dir = './data/movielens/ml-10m/pro/'
+    # load training data
+    uid = read_dict(os.path.join(data_dir, 'unique_user_id.txt'))
+    iid = read_dict(os.path.join(data_dir, 'unique_item_id.txt'))
+    train_rating_mat = load_rating_mat(data_dir, len(uid), len(iid), flag='train')
+
+    # train the model
+    model = SVD()
+    model.fit(train_rating_mat)
+
+    # load target test rating matrix
+    test_rating_mat = load_rating_mat(data_dir, len(uid), len(iid), flag='test')
+    # test algorithm on specific test set
+    predictions = model.test(test_rating_mat)
+
+    rmse = model.evaluate(predictions, test_rating_mat)
+    tmp = pd.DataFrame({'pred': predictions, 'truth': test_rating_mat.data})
+    tmp.to_csv("prediction_truth_comparison.csv")
+    return rmse
 
 
 if __name__ == '__main__':
