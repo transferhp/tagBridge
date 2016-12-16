@@ -1,7 +1,13 @@
 ######python####
 *.pyc
+*~
+*.so
+tagBridge/model/svd.c
 
-######data file######
+######build file#####
+build
+
+######ignore large data file######
 data/
 
 .idea/
